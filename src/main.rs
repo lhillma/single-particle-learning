@@ -24,43 +24,46 @@ impl System {
 struct Hamiltonian {
     mu: f32,
     k: f32,
+    alpha: f32,
 }
 
 impl Hamiltonian {
-    fn new(mu: f32, k: f32) -> Self {
-        Self { mu, k }
+    fn new(mu: f32, k: f32, alpha: f32) -> Self {
+        Self { mu, k, alpha }
     }
 }
 
 struct HamiltonianTensor<B: Backend> {
-    mu: Tensor<Autodiff<B>, 1>,
-    k: Tensor<Autodiff<B>, 1>,
+    parameters: Tensor<Autodiff<B>, 1>,
 }
 
 impl<B: Backend> HamiltonianTensor<B> {
-    fn new(mu: f32, k: f32, device: &B::Device) -> Self {
-        let mu = TensorData::new(vec![mu], [1]);
-        let k = TensorData::new(vec![k], [1]);
+    fn new(mu: f32, k: f32, alpha: f32, device: &B::Device) -> Self {
+        let parameters = TensorData::new(vec![mu, k, alpha], [3]);
         Self {
-            mu: Tensor::from_data(mu, device).require_grad(),
-            k: Tensor::from_data(k, device).require_grad(),
+            parameters: Tensor::from_data(parameters, device).require_grad(),
         }
     }
 }
 
 fn compute_energy_tensor<B: Backend, const D: usize>(
     position: Tensor<Autodiff<B>, D>,
-    HamiltonianTensor { mu, k }: &HamiltonianTensor<B>,
+    HamiltonianTensor { parameters }: &HamiltonianTensor<B>,
 ) -> Tensor<Autodiff<B>, D> {
     let position = position.detach();
+    let mu = parameters.clone().slice([0..1]);
+    let k = parameters.clone().slice([1..2]);
+    let alpha = parameters.clone().slice([2..3]);
     let shifted = position.clone().sub(mu.clone().expand(position.shape()));
+    let shifted = shifted.abs();
 
-    k.clone().expand(position.shape()).mul_scalar(0.5) * shifted.clone() * shifted
+    k.clone().expand(position.shape()) * shifted.powf(alpha.expand(position.shape()))
 }
 
 fn compute_energy(system: &System, hamiltonian: &Hamiltonian) -> f32 {
     let shifted = hamiltonian.mu - system.position;
-    0.5 * hamiltonian.k * shifted * shifted
+    let shifted = shifted.abs();
+    hamiltonian.k * shifted.powf(hamiltonian.alpha)
 }
 
 fn step(system: &mut System, hamiltonian: &Hamiltonian, rng: &mut ThreadRng) {
@@ -84,7 +87,7 @@ fn step(system: &mut System, hamiltonian: &Hamiltonian, rng: &mut ThreadRng) {
 
 fn data_gen() -> Result<(), Error> {
     let mut rng = rand::rng();
-    let hamiltonian = Hamiltonian::new(1.0, 2.0);
+    let hamiltonian = Hamiltonian::new(1.0, 2.0, 4.0);
     let mut system = System::new(hamiltonian.mu);
 
     const N_SAMPLES: usize = 1_000_000;
@@ -109,13 +112,14 @@ fn train() -> Result<(), Error> {
     // type B = burn_cuda::Cuda;
     let n_epochs = 10_000;
     let batch_size = 10_000;
-    let lr = 0.005;
+    let lr = 0.05;
     let device = Default::default();
 
     let mut mu = 1.4;
     let mut k = 1.2;
+    let mut alpha = 3.0;
 
-    let mut hamiltonian_tensor = HamiltonianTensor::<B>::new(mu, k, &device);
+    let mut hamiltonian_tensor = HamiltonianTensor::<B>::new(mu, k, alpha, &device);
     let mut rng = rand::rng();
 
     // Load data
@@ -133,13 +137,14 @@ fn train() -> Result<(), Error> {
 
     let mut ks: Array1<f32> = Array1::zeros([n_epochs]);
     let mut mus: Array1<f32> = Array1::zeros([n_epochs]);
+    let mut alphas: Array1<f32> = Array1::zeros([n_epochs]);
 
     for epoch in 0..n_epochs {
         let positions: Vec<_> = (0..batch_size)
             .into_par_iter()
             .map(|_| {
                 let mut rng = rand::rng();
-                let hamiltonian = Hamiltonian::new(mu, k);
+                let hamiltonian = Hamiltonian::new(mu, k, alpha);
                 let mut system = System::new(hamiltonian.mu);
 
                 for _ in 0..1000 {
@@ -164,33 +169,48 @@ fn train() -> Result<(), Error> {
         let grads_sim = sim_energy.backward();
         let grads_data = data_energy.backward();
 
-        let grad_mu = hamiltonian_tensor.mu.clone().grad(&grads_data).unwrap()
-            - hamiltonian_tensor.mu.grad(&grads_sim).unwrap();
+        let grad_parameters = hamiltonian_tensor
+            .parameters
+            .clone()
+            .grad(&grads_data)
+            .unwrap()
+            - hamiltonian_tensor.parameters.grad(&grads_sim).unwrap();
 
-        let grad_k = hamiltonian_tensor.k.clone().grad(&grads_data).unwrap()
-            - hamiltonian_tensor.k.grad(&grads_sim).unwrap();
+        let parameters_new: Vec<f32> = (hamiltonian_tensor.parameters.clone().inner()
+            - grad_parameters.mul_scalar(lr))
+        .to_data()
+        .to_vec()
+        .unwrap();
 
-        mu = (hamiltonian_tensor.mu.clone().inner() - grad_mu.mul_scalar(lr))
-            .to_data()
-            .to_vec()
-            .unwrap()[0];
-        k = (hamiltonian_tensor.k.clone().inner() - grad_k.mul_scalar(lr))
-            .to_data()
-            .to_vec()
-            .unwrap()[0];
-        hamiltonian_tensor = HamiltonianTensor::new(mu, k, &device);
+        mu = parameters_new[0];
+        k = parameters_new[1];
+
+        // only update alpha if it isn't NaN
+        if parameters_new[2].is_finite() {
+            alpha = parameters_new[2];
+        }
+
+        hamiltonian_tensor = HamiltonianTensor::new(mu, k, alpha, &device);
 
         if (epoch + 1) % 100 == 0 {
-            println!("epoch: {}, mu: {}, k:{}", epoch + 1, mu, k);
+            println!(
+                "epoch: {}, mu: {}, k:{}, alpha: {}",
+                epoch + 1,
+                mu,
+                k,
+                alpha
+            );
         }
 
         ks[epoch] = k;
         mus[epoch] = mu;
+        alphas[epoch] = alpha;
     }
 
     let mut npz = NpzWriter::new(std::fs::File::create("training.npz")?);
     npz.add_array("ks", &ks)?;
     npz.add_array("mus", &mus)?;
+    npz.add_array("alphas", &alphas)?;
 
     Ok(())
 }
