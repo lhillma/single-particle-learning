@@ -21,6 +21,7 @@ impl System {
     }
 }
 
+/// Bare struct with parameters for efficient MC sampling
 struct Hamiltonian {
     mu: f32,
     k: f32,
@@ -33,6 +34,7 @@ impl Hamiltonian {
     }
 }
 
+/// Struct holding differentiable parameter tensor
 struct HamiltonianTensor<B: Backend> {
     parameters: Tensor<Autodiff<B>, 1>,
 }
@@ -46,6 +48,12 @@ impl<B: Backend> HamiltonianTensor<B> {
     }
 }
 
+/// Compute the energy of the system given the position and the Hamiltonian parameters
+///
+/// This energy computation supports taking the gradient with respect to the parameters.o
+///
+/// * `position` - The position of the particle
+/// * `HamiltonianTensor` - The Hamiltonian parameters
 fn compute_energy_tensor<B: Backend, const D: usize>(
     position: Tensor<Autodiff<B>, D>,
     HamiltonianTensor { parameters }: &HamiltonianTensor<B>,
@@ -60,12 +68,23 @@ fn compute_energy_tensor<B: Backend, const D: usize>(
     k.clone().expand(position.shape()) * shifted.powf(alpha.expand(position.shape()))
 }
 
+/// Compute the energy given the system and the Hamiltonian parameters
+///
+/// This function does not support taking the gradient with respect to the parameters to increase
+/// efficiency during MC sampling.
+///
+/// * `system` - The system state
+/// * `hamiltonian` - The Hamiltonian parameters
 fn compute_energy(system: &System, hamiltonian: &Hamiltonian) -> f32 {
     let shifted = hamiltonian.mu - system.position;
     let shifted = shifted.abs();
     hamiltonian.k * shifted.powf(hamiltonian.alpha)
 }
 
+/// Single MCMC step
+///
+/// * `system` - The system state
+/// * ``hamiltonian` - The Hamiltonian parameters
 fn step(system: &mut System, hamiltonian: &Hamiltonian, rng: &mut ThreadRng) {
     let energy = compute_energy(system, hamiltonian);
 
@@ -85,6 +104,7 @@ fn step(system: &mut System, hamiltonian: &Hamiltonian, rng: &mut ThreadRng) {
     }
 }
 
+/// Generate the training data
 fn data_gen() -> Result<(), Error> {
     let mut rng = rand::rng();
     let hamiltonian = Hamiltonian::new(1.0, 2.0, 4.0);
@@ -107,6 +127,7 @@ fn data_gen() -> Result<(), Error> {
     Ok(())
 }
 
+/// Train the model
 fn train() -> Result<(), Error> {
     type B = burn::backend::NdArray;
     // type B = burn_cuda::Cuda;
@@ -216,7 +237,7 @@ fn train() -> Result<(), Error> {
 }
 
 fn main() -> Result<(), Error> {
-    // data_gen()?;
+    // data_gen()?;  // uncomment to generate new data
     train()?;
 
     Ok(())
