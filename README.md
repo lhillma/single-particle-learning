@@ -9,25 +9,29 @@ This project aims to showcase the use of statistical learning to estimate the
 parameters $\theta = (k, \mu, \alpha)$ for a thermal particle in a potential with
 the Hamiltonian
 
-$$
+```math
 H_\theta(x) = k||x - \mu||^\alpha.
-$$
+```
 
 To that end, we use MCMC sampling to generate samples for a known set $\theta^*
 = (k, \mu, \alpha)$, which yields samples of the target distribution
 $p_\mathrm{data}(x)$. This data is subsequently fed into a statistical learning
 algorithm, which performs stochastic gradient descent on the loss
-$$
+
+```math
 \mathcal{L}_\theta = -\int dx \log p_\theta(x) p_\mathrm{data}(x),
-$$
+```
+
 where $p_\theta(x)$ is the probability function of the canonical ensemble
-$$
+
+```math
 p(x) = \frac{e^{H_\theta(x)}}{Z_\theta}.
-$$
+```
 The gradient to optimise is thus
-$$
+
+```math
 \partial_\theta \mathcal{L}_\theta = \langle \partial_\theta H_\theta \rangle_{p_\mathrm{data}} - \langle \partial_\theta H_\theta \rangle_{p_\theta}.
-$$
+```
 
 Performing stochastic gradient descent on this gradient indeed results in
 convergence of the parameters to $\theta^*$:
