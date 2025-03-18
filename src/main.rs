@@ -88,6 +88,7 @@ fn compute_energy(system: &System, hamiltonian: &Hamiltonian) -> f32 {
 fn step(system: &mut System, hamiltonian: &Hamiltonian, rng: &mut ThreadRng) {
     let energy = compute_energy(system, hamiltonian);
 
+    // Note: The step size should probably be chosen more carefully
     let proposed_position = system.position + rng.random_range(-1.0..1.0);
 
     let proposed_energy = compute_energy(
@@ -99,6 +100,7 @@ fn step(system: &mut System, hamiltonian: &Hamiltonian, rng: &mut ThreadRng) {
 
     let delta_energy = proposed_energy - energy;
 
+    // Metropolis-Hastings step
     if delta_energy < 0.0 || rng.random_range(0.0..1.0) < (-delta_energy).exp() {
         system.position = proposed_position;
     }
