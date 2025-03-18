@@ -263,7 +263,7 @@ fn load_batched_training_data<B: Backend>(
 }
 
 fn main() -> Result<(), Error> {
-    // data_gen()?;  // uncomment to generate new data
+    data_gen()?; // uncomment to generate new data
     train()?;
 
     Ok(())
