@@ -144,17 +144,19 @@ fn train() -> Result<(), Error> {
     let mut k = 1.2;
     let mut alpha = 3.0;
 
-    let mut hamiltonian_tensor = HamiltonianTensor::<B>::new(mu, k, alpha, &device);
     let mut rng = rand::rng();
 
     // Load data
     let batches = load_batched_training_data(batch_size, &device, &mut rng)?;
 
+    // Data logging
     let mut ks: Array1<f32> = Array1::zeros([n_epochs]);
     let mut mus: Array1<f32> = Array1::zeros([n_epochs]);
     let mut alphas: Array1<f32> = Array1::zeros([n_epochs]);
 
+    // Training loop
     for epoch in 0..n_epochs {
+        // sample energies with MCMC
         let positions: Vec<_> = (0..batch_size)
             .into_par_iter()
             .map(|_| {
@@ -171,9 +173,11 @@ fn train() -> Result<(), Error> {
         let positions = TensorData::new(positions, [batch_size]);
         let positions = Tensor::<Autodiff<B>, 1>::from_data(positions, &device);
 
+        let hamiltonian_tensor = HamiltonianTensor::<B>::new(mu, k, alpha, &device);
         let sim_energies = compute_energy_tensor(positions, &hamiltonian_tensor);
         let sim_energy = sim_energies.mean();
 
+        // sample energies from data
         // select a random batch
         let idx = rng.random_range(0..batches.len());
         let batch = batches[idx].clone();
@@ -181,6 +185,7 @@ fn train() -> Result<(), Error> {
         let data_energies = compute_energy_tensor(batch, &hamiltonian_tensor);
         let data_energy = data_energies.mean();
 
+        // Gradient of loss (data - simulated) w.r.t. parameters
         let grads_sim = sim_energy.backward();
         let grads_data = data_energy.backward();
 
@@ -191,12 +196,14 @@ fn train() -> Result<(), Error> {
             .unwrap()
             - hamiltonian_tensor.parameters.grad(&grads_sim).unwrap();
 
+        // stochastic gradient descent update step
         let parameters_new: Vec<f32> = (hamiltonian_tensor.parameters.clone().inner()
             - grad_parameters.mul_scalar(lr))
         .to_data()
         .to_vec()
         .unwrap();
 
+        // Move parameters out of tensor to use them in MCMC sampler
         mu = parameters_new[0];
         k = parameters_new[1];
 
@@ -205,8 +212,7 @@ fn train() -> Result<(), Error> {
             alpha = parameters_new[2];
         }
 
-        hamiltonian_tensor = HamiltonianTensor::new(mu, k, alpha, &device);
-
+        // Logging
         if (epoch + 1) % 100 == 0 {
             println!(
                 "epoch: {}, mu: {}, k:{}, alpha: {}",
@@ -216,12 +222,12 @@ fn train() -> Result<(), Error> {
                 alpha
             );
         }
-
         ks[epoch] = k;
         mus[epoch] = mu;
         alphas[epoch] = alpha;
     }
 
+    // Save weight data per epoch
     let mut npz = NpzWriter::new(std::fs::File::create("training.npz")?);
     npz.add_array("ks", &ks)?;
     npz.add_array("mus", &mus)?;
