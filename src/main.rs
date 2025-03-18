@@ -130,7 +130,7 @@ fn data_gen() -> Result<(), Error> {
 /// Train the model
 fn train() -> Result<(), Error> {
     type B = burn::backend::NdArray;
-    // type B = burn_cuda::Cuda;
+    // type B = burn_cuda::Cuda;  // uncomment to use CUDA for training
     let n_epochs = 10_000;
     let batch_size = 10_000;
     let lr = 0.05;
@@ -144,17 +144,7 @@ fn train() -> Result<(), Error> {
     let mut rng = rand::rng();
 
     // Load data
-    let mut npz = NpzReader::new(std::fs::File::open("data.npz")?)?;
-    let positions_data: Array1<f32> = npz.by_name("positions")?;
-    let data_shape = positions_data.shape();
-    let n_batches = data_shape[0] / batch_size;
-    let mut positions_data: Vec<f32> = positions_data.to_vec();
-    positions_data = positions_data[0..n_batches * batch_size].to_vec();
-    positions_data.shuffle(&mut rng);
-    let data_shape = [positions_data.len()];
-    let positions_data = TensorData::new(positions_data, data_shape);
-    let positions_data: Tensor<Autodiff<B>, 1> = Tensor::from_data(positions_data, &device);
-    let batches = positions_data.chunk(n_batches, 0);
+    let batches = load_batched_training_data(batch_size, device, &mut rng)?;
 
     let mut ks: Array1<f32> = Array1::zeros([n_epochs]);
     let mut mus: Array1<f32> = Array1::zeros([n_epochs]);
@@ -234,6 +224,30 @@ fn train() -> Result<(), Error> {
     npz.add_array("alphas", &alphas)?;
 
     Ok(())
+}
+
+/// Load training data in batches
+///
+/// * `batch_size` - The size of the batches
+/// * `device` - The device to load the data on
+/// * `rng` - The random number generator for shuffling
+fn load_batched_training_data<B: Backend>(
+    batch_size: usize,
+    device: B::Device,
+    rng: &mut ThreadRng,
+) -> Result<Vec<Tensor<Autodiff<B>, 1>>, Error> {
+    let mut npz = NpzReader::new(std::fs::File::open("data.npz")?)?;
+    let positions_data: Array1<f32> = npz.by_name("positions")?;
+    let data_shape = positions_data.shape();
+    let n_batches = data_shape[0] / batch_size;
+    let mut positions_data: Vec<f32> = positions_data.to_vec();
+    positions_data = positions_data[0..n_batches * batch_size].to_vec();
+    positions_data.shuffle(rng);
+    let data_shape = [positions_data.len()];
+    let positions_data = TensorData::new(positions_data, data_shape);
+    let positions_data: Tensor<Autodiff<B>, 1> = Tensor::from_data(positions_data, &device);
+    let batches = positions_data.chunk(n_batches, 0);
+    Ok(batches)
 }
 
 fn main() -> Result<(), Error> {
